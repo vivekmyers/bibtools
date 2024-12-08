@@ -1,0 +1,217 @@
+#!/usr/bin/env perl
+
+# Author: Vivek Myers <vivek.myers@gmail.com>
+# Date: 2024-11-20
+#
+# Format .bib files, sorting by bibkey, titlecasing, and fixing common abbreviations
+# Strips URLs, abstracts, keywords, notes, and language fields from non-misc entries
+# Converts papers with arXiv identifiers to misc entries with eprint fields
+
+use utf8;
+use autodie;
+
+sub casefix {
+    %subst = (
+        "rl" => "RL",
+        "gcrl" => "GCRL",
+        "llm" => "LLM",
+        "vlm" => "VLM",
+        "ml" => "ML",
+        "nlp" => "NLP",
+        "cv" => "CV",
+        "dqn" => "DQN",
+        "ddpg" => "DDPG",
+        "ppo" => "PPO",
+        "sac" => "SAC",
+        "td3" => "TD3",
+        "trpo" => "TRPO",
+        "d4rl" => "D4RL",
+        "vae" => "VAE",
+        "gan" => "GAN",
+        "arxiv" => "arXiv",
+        "icml" => "ICML",
+        "nips" => "NeurIPS",
+        "neurips" => "NeurIPS",
+        "corl" => "CoRL",
+        "aaai" => "AAAI",
+        "icra" => "ICRA",
+        "l4dc" => "L4DC",
+        "iclr" => "ICLR",
+        "iccv" => "ICCV",
+        "eccv" => "ECCV",
+        "cvpr" => "CVPR",
+        "ijcai" => "IJCAI",
+        "ijrr" => "IJRR",
+        "rss" => "RSS",
+        "acl" => "ACL",
+        "emnlp" => "EMNLP",
+        "naacl" => "NAACL",
+    );
+
+    local $_ = shift;
+    while (my ($k, $v) = each %subst) {
+        s/\b$k\b/$v/gi;
+    }
+    return $_;
+}
+
+sub titlecase {
+    my @small_words = qw( (?<!q&)a an and as at(?!&t) but by en for if in of on or the to v[.]? via vs[.]? );
+    my $small_re = join '|', @small_words;
+    my $apos = qr/ (?: ['’] [[:lower:]]* )? /x;
+
+    local $_ = shift;
+    s{\A\s+}{}, s{\s+\z}{};
+    $_ = lc $_ if not /[[:lower:]]/;
+
+    s{ \b (_*) (?:
+        ( (?<=[ ][/\\]) [[:alpha:]]+ [-_[:alpha:]/\\]+ |
+        [-_[:alpha:]]+ [@.:] [-_[:alpha:]@.:/]+ $apos ) |
+        ( (?i: $small_re ) $apos ) |
+        ( (?<!\\['"^])(?<!\\) [[:alpha:]] [[:lower:]'’()\[\]{}]* $apos ) |
+        ( [[:alpha:]] [[:alpha:]'’()\[\]{}]* $apos )) (_*) \b
+    }{
+        $1 . (
+        defined $2 ? $2
+        : defined $3 ? "\L$3"
+        : defined $4 ? "\u\L$4"
+        : $5
+        ) . $6
+    }xeg;
+
+    s{ (  \A [[:punct:]]* |  [:.;?!][ ]+ |  [ ]['"“‘(\[][ ]*     ) ( $small_re ) \b }{$1\u\L$2}xig;
+    s{ \b ( $small_re ) (?= [[:punct:]]* \Z |   ['"’”)\]] [ ] ) }{\u\L$1}xig;
+    s{ \b (?<! -) ( $small_re ) (?= -[[:alpha:]]+) }{\u\L$1}xig;
+    s{ \b (?<!…) ( [[:alpha:]]+- ) ( $small_re ) (?! - ) }{$1\u$2}xig;
+
+    return $_;
+}
+
+if ($#ARGV < 0) {
+    print "Usage: bibfix <bibfile>\n";
+    exit;
+}
+
+$bibargs = join " ", @ARGV;
+open $biber, "biber --tool --output-safechars --output_align --output-legacy-dates --output_indent=4 --output_fieldcase=lower -q -O - $bibargs |";
+
+$/ = "";
+$balanced = qr{
+    ((?:[^\{\}\\]*|\\.|\{(?1)\})*)
+}x;
+
+while (<$biber>) {
+    utf8::decode $_;
+
+    my $entry = $_;
+    /\@(\w+)\s*\{(.*),/ and $k=$2 or die "No key found for $_";
+    my $type = $1;
+
+    if (($entry =~ /\bjournal\w*\s*=\s*\{$balanced\},/
+                and $1 =~ /arXiv.\s*(\d+).(\d+)/i)
+            or ($entry =~ /\bvolume\w*\s*=\s*\{$balanced\},/
+                and $1 =~ m{abs/(\d+).(\d+)}i)) {
+        $misc = "$1.$2";
+        my $haseprint = $entry =~ /\beprint\b\s*=/;
+        $type = "misc";
+        $entry =~ s/\@\w+/\@misc/;
+        unless ($haseprint) {
+            $entry =~ s{
+                \b(volume|journal)\w*\s*=\s*\{$balanced\},
+            }{eprinttype   = {arXiv},\n  eprint       = {$misc},}sx;
+        }
+        $entry =~ s{ \b(volume|journal)\w*\s*=\s*\{$balanced\}, }{}gsx;
+    }
+
+    my @titlepats = qw(booktitle journal journaltitle title shorttitle);
+    for my $key (@titlepats) {
+        $entry =~ /(\b$key\b)(\s*)=\s*(.*),/ or next;
+        $prefix = $2;
+        $3 =~ /\{$balanced\}/ or next;
+        $_ = $&;
+        /\$/ and next;
+        my $match = qr/\b$key\b\s*=\s*\Q$_\E/;
+
+        s/[{}]//g;
+        s/^\s*//;
+        s/\s*$//;
+        s/[\.]*$//g;
+        $key = lc $key;
+
+        if ($key =~ /^journal|^booktitle/i) {
+            s/^\s*the //i;
+            s/^\s*annual //i;
+            s/^\s*proceedings of //i;
+            s/^\s*advances in //i;
+            s/^\s*conference on ((?:\s*\b\w+\b\s*){4,})/$1/i;
+            s/^\s*\d+\s*//;
+            s/^\s*the //i;
+            s/^\s*1st //i;
+            s/^\s*2nd //i;
+            s/^\s*\d+th //i;
+            s/\(.*\)\s*$//i;
+            s/arxiv/arXiv/gi;
+            s/\s*,.*$//;
+        };
+
+        if ($key eq "journaltitle") {
+            $key = "journal     ";
+        };
+
+        $_ = ucfirst titlecase $_;
+        $_ = casefix $_;
+
+        s{
+            \b
+              (?: (?:(?<=\s)[a-zA-Z\-]*\\.[a-zA-Z\-]*)+
+                  |( ([A-Z][a-zA-Z\-]+
+                          |[A-Z][a-zA-Z\-]*\d+[a-zA-Z\-]*\d*
+                          |[iI])
+                     (\s*([A-Z][a-zA-Z\-]+))* ) )
+            \b(?!\\)
+        }{
+            "{$&}"
+        }gxe;
+
+        $entry =~ s/$match/$key$prefix= {$_}/;
+    }
+
+    $entry =~ s{
+        \bauthor\b\s*=\s*\K\{$balanced\}
+    }{
+        "{".($1 =~ s/\*//gr)."}"
+    }xe;
+
+    @delpats = qw(url urldate abstract keywords note lang issn);
+    if ($type eq "misc") {
+        push @delpats, qw(eprintclass)
+    } else {
+        push @delpats, qw(doi eprint urldate);
+    }
+
+    for my $key (@delpats) {
+        $entry =~ s/$key\w*\s*=\s*\{$balanced\},\s*//s;
+    }
+
+    $entries{$k} = $entry;
+};
+
+for (@ARGV) {
+    unlink "$_.blg";
+}
+
+$lvl = 100;
+for (sort {(lc $a) cmp (lc $b)} keys %entries) {
+    for (split /\n/, $entries{$_}) {
+        if (/^(.*)=([^\n]*)/m and length($&) > $lvl) {
+            $idt = " " x (3 + length $1);
+            s/(.{$lvl})\s+/$1\n$idt/g or break;
+        };
+        utf8::encode $_;
+        print "$_\n";
+    }
+    print "\n";
+}
+
+
+

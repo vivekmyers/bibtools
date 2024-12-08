@@ -1,0 +1,37 @@
+#!/usr/bin/env perl
+
+# Author: Vivek Myers <vivek.myers@gmail.com>
+# Date: 2024-12-07
+#
+# Reads supplied .bib files and prints duplicate entries based on title and authors
+# Each line of output is a list of keys that are duplicates
+
+
+
+$/ = "";
+
+while (<>) {
+    m{\s*\w+\s*\{(\w+),}x and do {
+        $key = $1;
+        m{
+            \btitle\s*=\s*\{((?:[^\{\}\\]*|\\.|\{(?1)\})*)\}
+        }smx and do {
+            $title = "$1";
+            m{
+                \bauthor\s*=\s*\{((?:[^\{\}\\]*|\\.|\{(?1)\})*)\}
+            }smx;
+            $_ = "$title $1";
+            $_ = lc $_;
+            s/[^\w\s]/ /gsx;
+            s/[\s\{\}]+/ /gsx;
+            s/^\s+|\s+$//gsx;
+            push @{ $keys{$_} }, $key;
+        };
+    };
+}
+
+for (sort { $keys{$a}[0] cmp $keys{$b}[0] } keys %keys) {
+    if (@{ $keys{$_} } > 1) {
+        print join(" ", @{ $keys{$_} }), "\n";
+    }
+}
