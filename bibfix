@@ -10,46 +10,59 @@
 use utf8;
 use autodie;
 
+%acronyms = (
+    "rl" => "RL",
+    "gcrl" => "GCRL",
+    "llm" => "LLM",
+    "vlm" => "VLM",
+    "ml" => "ML",
+    "nlp" => "NLP",
+    "cv" => "CV",
+    "dqn" => "DQN",
+    "ddpg" => "DDPG",
+    "ppo" => "PPO",
+    "sac" => "SAC",
+    "td3" => "TD3",
+    "trpo" => "TRPO",
+    "d4rl" => "D4RL",
+    "vae" => "VAE",
+    "gan" => "GAN",
+    "arxiv" => "arXiv",
+    "icml" => "ICML",
+    "nips" => "NeurIPS",
+    "neurips" => "NeurIPS",
+    "corl" => "CoRL",
+    "aaai" => "AAAI",
+    "icra" => "ICRA",
+    "l4dc" => "L4DC",
+    "iclr" => "ICLR",
+    "iccv" => "ICCV",
+    "eccv" => "ECCV",
+    "cvpr" => "CVPR",
+    "ijcai" => "IJCAI",
+    "ijrr" => "IJRR",
+    "rss" => "RSS",
+    "acl" => "ACL",
+    "emnlp" => "EMNLP",
+    "naacl" => "NAACL",
+);
+
+@ordinals = (
+    "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth",
+    "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth", "fifteenth",
+    "sixteenth", "seventeenth", "eighteenth", "nineteenth", "twentieth", "thirtieth",
+    "fortieth", "fiftieth", "sixtieth", "seventieth", "eightieth", "ninetieth",
+    "hundredth", "thousandth", "millionth", "billionth", "trillionth"
+);
+push @ordinals, qr/\d*1st/i, qr/\d*2nd/i, qr/\d*3rd/i, qr/\d*[04-9]th/i;
+$ordinals = join "|", @ordinals;
+$ordinals = qr/(\w+-)*($ordinals)/i;
+
+
 sub casefix {
-    %subst = (
-        "rl" => "RL",
-        "gcrl" => "GCRL",
-        "llm" => "LLM",
-        "vlm" => "VLM",
-        "ml" => "ML",
-        "nlp" => "NLP",
-        "cv" => "CV",
-        "dqn" => "DQN",
-        "ddpg" => "DDPG",
-        "ppo" => "PPO",
-        "sac" => "SAC",
-        "td3" => "TD3",
-        "trpo" => "TRPO",
-        "d4rl" => "D4RL",
-        "vae" => "VAE",
-        "gan" => "GAN",
-        "arxiv" => "arXiv",
-        "icml" => "ICML",
-        "nips" => "NeurIPS",
-        "neurips" => "NeurIPS",
-        "corl" => "CoRL",
-        "aaai" => "AAAI",
-        "icra" => "ICRA",
-        "l4dc" => "L4DC",
-        "iclr" => "ICLR",
-        "iccv" => "ICCV",
-        "eccv" => "ECCV",
-        "cvpr" => "CVPR",
-        "ijcai" => "IJCAI",
-        "ijrr" => "IJRR",
-        "rss" => "RSS",
-        "acl" => "ACL",
-        "emnlp" => "EMNLP",
-        "naacl" => "NAACL",
-    );
 
     local $_ = shift;
-    while (my ($k, $v) = each %subst) {
+    while (my ($k, $v) = each %acronyms) {
         s/\b$k\b/$v/gi;
     }
     return $_;
@@ -93,7 +106,7 @@ if ($#ARGV < 0) {
 }
 
 $bibargs = join " ", @ARGV;
-open $biber, "biber --tool --output-safechars --output_align --output-legacy-dates --output_indent=4 --output_fieldcase=lower -q -O - $bibargs |";
+open $biber, "biber --tool --output-safechars --output_align --output-legacy-dates --output_indent=2 --output_fieldcase=lower -q -O - $bibargs |";
 
 $/ = "";
 $balanced = qr{
@@ -139,16 +152,17 @@ while (<$biber>) {
         $key = lc $key;
 
         if ($key =~ /^journal|^booktitle/i) {
-            s/^\s*the //i;
-            s/^\s*annual //i;
-            s/^\s*proceedings of //i;
-            s/^\s*advances in //i;
+            s/^\s*the\s+//i;
+            s/^\s*$ordinals\s+//i;
+            s/^\s*annual\s+//i;
+            s/^\s*proceedings of\s+//i;
+            s/^\s*$ordinals\s+//i;
+            s/^\s*annual\s+//i;
             s/^\s*conference on ((?:\s*\b\w+\b\s*){4,})/$1/i;
+            s/^\s*advances in\s+//i;
             s/^\s*\d+\s*//;
-            s/^\s*the //i;
-            s/^\s*1st //i;
-            s/^\s*2nd //i;
-            s/^\s*\d+th //i;
+            s/^\s*the\s+//i;
+            s/^\s*$ordinals\s+//i;
             s/\(.*\)\s*$//i;
             s/arxiv/arXiv/gi;
             s/\s*,.*$//;
@@ -203,6 +217,7 @@ for (@ARGV) {
 $lvl = 100;
 for (sort {(lc $a) cmp (lc $b)} keys %entries) {
     for (split /\n/, $entries{$_}) {
+        s/^  /    /;
         if (/^(.*)=([^\n]*)/m and length($&) > $lvl) {
             $idt = " " x (3 + length $1);
             s/(.{$lvl})\s+/$1\n$idt/g or break;
