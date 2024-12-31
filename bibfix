@@ -11,7 +11,7 @@ use utf8;
 use autodie;
 use Getopt::Long;
 
-$wrap = 100;
+$wrap = 80;
 $indent = 4;
 
 GetOptions(
@@ -117,7 +117,7 @@ open $biber, "biber --tool --output-safechars --output_align --output-legacy-dat
 
 $/ = "";
 $balanced = qr{
-    ((?:[^\{\}\\]++|\\.|\{(?1)\})*)
+    ((?:\{(?1)\}|\\.|[^\{\}\\]++)*)
 }x;
 
 while (<$biber>) {
@@ -162,9 +162,10 @@ while (<$biber>) {
 
     my @titlepats = qw(booktitle journal journaltitle title shorttitle);
     for my $key (@titlepats) {
-        $entry =~ /(\b$key\b)(\s*)=\s*(\{$balanced\}),/ or next;
+        $entry =~ /(\b$key\b)(\s*)=(.*),/s or next;
         $prefix = $2;
-        $_ = $3;
+        $3 =~ /^\s*(\{$balanced\})/s or next;
+        $_ = $&;
         /\$/ and next;
         my $match = qr/\b$key\b\s*=\s*\Q$_\E/s;
 
@@ -251,7 +252,8 @@ for (sort {(lc $a) cmp (lc $b)} keys %entries) {
     for (split /\n/) {
         if (/^(.*)=(.*)$/m and length $& > $wrap) {
             $cr = "\n" . (" " x (3 + length $1));
-            s/(.{$wrap})\s+(\S)/$1$cr$2/g or break;
+            my $n = $wrap - 10;
+            s/(.{$n})\s+(\S)/$1$cr$2/g;
         };
         utf8::encode $_;
         print "$_\n";
