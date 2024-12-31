@@ -9,6 +9,15 @@
 
 use utf8;
 use autodie;
+use Getopt::Long;
+
+$wrap = 100;
+$indent = 4;
+
+GetOptions(
+    "w|wrap=i" => \$wrap,
+    "i|indent=i" => \$indent,
+);
 
 %acronyms = (
     "rl" => "RL",
@@ -58,9 +67,7 @@ push @ordinals, qr/\d*1st/i, qr/\d*2nd/i, qr/\d*3rd/i, qr/\d*[04-9]th/i;
 $ordinals = join "|", @ordinals;
 $ordinals = qr/(\w+-)*($ordinals)/i;
 
-
 sub casefix {
-
     local $_ = shift;
     while (my ($k, $v) = each %acronyms) {
         s/\b$k\b/$v/gi;
@@ -101,49 +108,65 @@ sub titlecase {
 }
 
 if ($#ARGV < 0) {
-    print "Usage: bibfix <bibfile>\n";
+    print STDERR "Usage: bibfix <bibfile>\n";
     exit;
 }
 
 $bibargs = join " ", @ARGV;
-open $biber, "biber --tool --output-safechars --output_align --output-legacy-dates --output_indent=2 --output_fieldcase=lower -q -O - $bibargs |";
+open $biber, "biber --tool --output-safechars --output_align --output-legacy-dates --output_indent=$indent --output_fieldcase=lower -q -O - $bibargs |" or die "Can't open biber: $!";
 
 $/ = "";
 $balanced = qr{
-    ((?:[^\{\}\\]*|\\.|\{(?1)\})*)
+    ((?:[^\{\}\\]++|\\.|\{(?1)\})*)
 }x;
 
 while (<$biber>) {
     utf8::decode $_;
 
     my $entry = $_;
-    /\@(\w+)\s*\{(.*),/ and $k=$2 or die "No key found for $_";
+    /\@(\w+)\s*\{(.*),/ and $k=$2 or die "No key found for: $_";
     my $type = $1;
 
-    if (($entry =~ /\bjournal\w*\s*=\s*\{$balanced\},/
+    if (($entry =~ /\bjournal\w*\s*=\s*\{$balanced\},/s
                 and $1 =~ /arXiv.\s*(\d+).(\d+)/i)
-            or ($entry =~ /\bvolume\w*\s*=\s*\{$balanced\},/
+            or ($entry =~ /\bvolume\w*\s*=\s*\{$balanced\},/s
                 and $1 =~ m{abs/(\d+).(\d+)}i)) {
         $misc = "$1.$2";
         my $haseprint = $entry =~ /\beprint\b\s*=/;
         $type = "misc";
         $entry =~ s/\@\w+/\@misc/;
-        unless ($haseprint) {
+        $cr = "\n" . (" " x $indent);
+        unless ($entry =~ /\beprint\b\s*=/) {
             $entry =~ s{
-                \b(volume|journal)\w*\s*=\s*\{$balanced\},
-            }{eprinttype   = {arXiv},\n  eprint       = {$misc},}sx;
-        }
-        $entry =~ s{ \b(volume|journal)\w*\s*=\s*\{$balanced\}, }{}gsx;
+                ^(\s*\bauthor\b\s*=\s*\{$balanced\},)\s*
+            }{
+                $1.$cr."eprint       = {$misc},$cr"
+            }smxe;
+        };
+        unless ($entry =~ /\beprinttype\b\s*=/) {
+            $entry =~ s{
+                ^(\s*\beprint\b\s*=\s*\{$balanced\},)\s*
+            }{
+                $1.$cr."eprinttype   = {arXiv},$cr"
+            }smxe;
+        };
+        unless ($entry =~ /\bhowpublished\b\s*=/) {
+            $entry =~ s{
+                ^(\s*\beprinttype\b\s*=\s*\{$balanced\},)\s*
+            }{
+              $1.$cr."howpublished = {arXiv:$misc},$cr"
+            }smxe;
+        };
+        $entry =~ s{ \b(volume|journal)\w*\s*=\s*\{$balanced\},\s* }{}gsx;
     }
 
     my @titlepats = qw(booktitle journal journaltitle title shorttitle);
     for my $key (@titlepats) {
-        $entry =~ /(\b$key\b)(\s*)=\s*(.*),/ or next;
+        $entry =~ /(\b$key\b)(\s*)=\s*(\{$balanced\}),/ or next;
         $prefix = $2;
-        $3 =~ /\{$balanced\}/ or next;
-        $_ = $&;
+        $_ = $3;
         /\$/ and next;
-        my $match = qr/\b$key\b\s*=\s*\Q$_\E/;
+        my $match = qr/\b$key\b\s*=\s*\Q$_\E/s;
 
         s/[{}]//g;
         s/^\s*//;
@@ -187,14 +210,20 @@ while (<$biber>) {
             "{$&}"
         }gxe;
 
-        $entry =~ s/$match/$key$prefix= {$_}/;
+        $entry =~ s/$match/$key$prefix= {$_}/s;
     }
 
     $entry =~ s{
         \bauthor\b\s*=\s*\K\{$balanced\}
     }{
         "{".($1 =~ s/\*//gr)."}"
-    }xe;
+    }sxe;
+
+    $entry =~ s{
+        \beprinttype\b\s*=\s*\K\{arxiv\}
+    }{
+        "{arXiv}"
+    }sxie;
 
     @delpats = qw(url urldate abstract keywords note lang issn);
     if ($type eq "misc") {
@@ -214,19 +243,19 @@ for (@ARGV) {
     unlink "$_.blg";
 }
 
-$lvl = 100;
 for (sort {(lc $a) cmp (lc $b)} keys %entries) {
-    for (split /\n/, $entries{$_}) {
-        s/^  /    /;
-        if (/^(.*)=([^\n]*)/m and length($&) > $lvl) {
-            $idt = " " x (3 + length $1);
-            s/(.{$lvl})\s+/$1\n$idt/g or break;
+    $_ = $entries{$_};
+    while (/\s\s=/ and !/\S\s=/) {
+        s/^(.*)\s(\s=)|^(\s)\s(\s*\S[^=]*$)/$1$2$3$4/gm;
+    };
+    for (split /\n/) {
+        if (/^(.*)=(.*)$/m and length $& > $wrap) {
+            $cr = "\n" . (" " x (3 + length $1));
+            s/(.{$wrap})\s+(\S)/$1$cr$2/g or break;
         };
         utf8::encode $_;
         print "$_\n";
     }
     print "\n";
 }
-
-
 
