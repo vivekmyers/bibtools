@@ -11,7 +11,7 @@ use utf8;
 use autodie;
 use Getopt::Long;
 
-$wrap = 80;
+$wrap = 100;
 $indent = 4;
 
 GetOptions(
@@ -250,12 +250,16 @@ for (sort {(lc $a) cmp (lc $b)} keys %entries) {
         s/^(.*)\s(\s=)|^(\s)\s(\s*\S[^=]*$)/$1$2$3$4/gm;
     };
     for (split /\n/) {
-        if (/^(.*)=(.*)$/m and length $& > $wrap) {
-            $cr = "\n" . (" " x (3 + length $1));
-            my $n = $wrap - 10;
-            s/(.{$n})\s+(\S)/$1$cr$2/g;
+        /^(.*)=(.*)$/m;
+        $nidt = (3 + length $1);
+        $cr = "\n" . (" " x $nidt);
+        $n = $wrap;
+        while (/.*$/ and length $& > $n) {
+            s/^(.{1,$n})\s+// or break;
+            print "$1$cr";
+            $n = $wrap - $nidt;
+            $n < 1 and $n = 10;
         };
-        utf8::encode $_;
         print "$_\n";
     }
     print "\n";
