@@ -121,7 +121,7 @@ open $biber,
 
 $/ = "";
 $balanced = qr{
-    ((?:\{(?1)\}|\\.|[^\{\}\\]++)*)
+    (?<bb>(?:\\.|[^\{\}\\]|\{(?&bb)\})*)
 }x;
 
 while (<$biber>) {
@@ -190,10 +190,9 @@ while (<$biber>) {
 
     my @titlepats = qw(booktitle journal journaltitle title shorttitle);
     for my $key (@titlepats) {
-        $entry =~ /(\b$key\b)(\s*)=(.*),/s or next;
+        $entry =~ /(\b$key\b)(\s*)=\s*(\{$balanced\}),/s or next;
         $prefix = $2;
-        $3 =~ /^\s*(\{$balanced\})/s or next;
-        $_ = $&;
+        $_ = $3;
         /\$/ and next;
         my $match = qr/\b$key\b\s*=\s*\Q$_\E/s;
 
