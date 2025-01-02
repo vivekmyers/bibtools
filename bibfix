@@ -76,7 +76,8 @@ sub casefix {
 }
 
 sub titlecase {
-    my @small_words = qw( (?<!q&)a an and as at(?!&t) but by en for if in of on or the to v[.]? via vs[.]? );
+    my @small_words = qw( (?<!q&)a an and as at(?!&t) but 
+        by en for if in of on or the to v[.]? via vs[.]? );
     my $small_re = join '|', @small_words;
     my $apos = qr/ (?: ['’] [[:lower:]]* )? /x;
 
@@ -107,13 +108,15 @@ sub titlecase {
     return $_;
 }
 
-if ($#ARGV < 0) {
+if ($#ARGV ne 1) {
     print STDERR "Usage: bibfix <bibfile>\n";
     exit;
 }
 
 $bibargs = join " ", @ARGV;
-open $biber, "biber --tool --output-safechars --output_align --output-legacy-dates --output_indent=$indent --output_fieldcase=lower -q -O - $bibargs |" or die "Can't open biber: $!";
+open $biber, "biber --tool --output-safechars --output_align --output-legacy-dates"
+    . "--output_indent=$indent --output_fieldcase=lower -q -O - $bibargs |"
+    or die "Can't open biber: $!";
 
 $/ = "";
 $balanced = qr{
