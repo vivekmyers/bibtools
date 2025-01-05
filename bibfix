@@ -170,22 +170,23 @@ while (<$biber>) {
             and $eprint = $1
             and $entry =~ /\beprinttype\b\s*=\s*\{($balanced)\},/s
             and $eprinttype = $1
+            and $eprinttype =~ /arxiv/i
         ) {
         $cr = "\n" . (" " x $indent);
         $entry =~ s{
             ^(\s*\beprinttype\b\s*=\s*\{$balanced\},)\s*
         }{
-            $1.$cr."howpublished = {$eprinttype:$eprint},$cr"
+            $1.$cr."howpublished = {arXiv:$eprint},$cr"
         }smxe;
         $entry =~ s{
-            (\b\w+\s*)(=\s*$balanced)
+            ^\s*\K(\b\w+\s*)(=)
         }{
             if (length $1 < 1 + length("howpublished")) {
                 $1.(" " x (1 + length("howpublished") - length $1)).$2
             } else {
                 $1.$2
             }
-        }gesx;
+        }gesxm;
     }
 
     my @titlepats = qw(booktitle journal journaltitle title shorttitle);
