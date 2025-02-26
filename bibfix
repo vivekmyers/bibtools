@@ -10,13 +10,15 @@
 use utf8;
 use autodie;
 use Getopt::Long;
+use List::Util qw(max);
 
-$wrap = 100;
+$wrap = 90;
 $indent = 4;
 
 GetOptions(
     "w|wrap=i" => \$wrap,
     "i|indent=i" => \$indent,
+    "u|unsorted" => \$unsorted,
 );
 
 %acronyms = (
@@ -54,6 +56,11 @@ GetOptions(
     "acl" => "ACL",
     "emnlp" => "EMNLP",
     "naacl" => "NAACL",
+    "ieee" => "IEEE",
+    "hiql" => "HIQL",
+    "iql" => "IQL",
+    "crl" => "CRL",
+    "cmd" => "CMD",
 );
 
 @ordinals = (
@@ -108,94 +115,63 @@ sub titlecase {
     return $_;
 }
 
-if ($#ARGV < 0) {
+if (@ARGV != 1) {
     print STDERR "Usage: bibfix <bibfile>\n";
     exit;
 }
 
-$bibargs = join " ", @ARGV;
+$arg = shift;
 open $biber,
     "biber --tool --output-safechars --output_align --output-legacy-dates"
-    . " --output_indent=$indent --output_fieldcase=lower -q -O - $bibargs |"
+    . " --output_indent=$indent --output_fieldcase=lower -q -O - $arg |"
     or die "Can't open biber: $!";
 
 $/ = "";
 $balanced = qr{
     (?<bb>(?:\\.|[^\{\}\\]|\{(?&bb)\})*)
-}x;
+}sx;
 
 while (<$biber>) {
     utf8::decode $_;
+    my %entry;
+    my %extra;
 
-    my $entry = $_;
-    /\@(\w+)\s*\{(.*),/ and $k = $2 or die "No key found for: $_";
+    while (/\b(\w+)\b\s*=\s*(?:\{(?<contents>$balanced)\}|(?<bare>\w+))/gsm) {
+        $entry{$1} = $+{contents} or $extra{$1} = $+{bare};
+    };
+    exists $entry{author} or die "No author found for: $_";
+
+    /\@(\S+)\s*\{(.*),$balanced\}\s*/ or die "No key found for: $_";
+    $+[0] == length $_ or die "Unbalanced braces in: $_ at ".$+[0]." of ".length $_;
     my $type = $1;
+    my $k = $2;
 
-    if (($entry =~ /\bjournal\w*\s*=\s*\{$balanced\},/s
-                and $1 =~ /arXiv.\s*(\d+).(\d+)/i)
-            or ($entry =~ /\bvolume\w*\s*=\s*\{$balanced\},/s
-                and $1 =~ m{abs/(\d+).(\d+)}i)) {
-        $misc = "$1.$2";
-        my $haseprint = $entry =~ /\beprint\b\s*=/;
+    if ($entry{journaltitle} =~ /arXiv.\s*(\d+).(\d+)/i
+            or $entry{volume} =~ m{abs/(\d+).(\d+)}i) {
+        my $eprint = "$1.$2";
         $type = "misc";
-        $entry =~ s/\@\w+/\@misc/;
-        $cr = "\n" . (" " x $indent);
-        unless ($entry =~ /\beprint\b\s*=/) {
-            $entry =~ s{
-                ^(\s*\bauthor\b\s*=\s*\{$balanced\},)\s*
-            }{
-                $1.$cr."eprint       = {$misc},$cr"
-            }smxe;
+        unless (exists $entry{eprint}) {
+            $entry{eprint} = $eprint;
         };
-        unless ($entry =~ /\beprinttype\b\s*=/) {
-            $entry =~ s{
-                ^(\s*\beprint\b\s*=\s*\{$balanced\},)\s*
-            }{
-                $1.$cr."eprinttype   = {arXiv},$cr"
-            }smxe;
+        unless (exists $entry{eprinttype}) {
+            $entry{eprinttype} = "arXiv";
         };
-        unless ($entry =~ /\bhowpublished\b\s*=/) {
-            $entry =~ s{
-                ^(\s*\beprinttype\b\s*=\s*\{$balanced\},)\s*
-            }{
-              $1.$cr."howpublished = {arXiv:$misc},$cr"
-            }smxe;
+        unless (exists $entry{howpublished}) {
+            $entry{howpublished} = "{arXiv:$eprint}"
         };
-        $entry =~ s{ \b(volume|journal)\w*\s*=\s*\{$balanced\},\s* }{}gsx;
+        delete $entry{volume};
+        delete $entry{journaltitle};
     }
 
-    if ($type eq "misc"
-            and $entry !~ /\bhowpublished\b\s*=\s*\{$balanced\},/s
-            and $entry =~ /\beprint\b\s*=\s*\{($balanced)\},/s
-            and $eprint = $1
-            and $entry =~ /\beprinttype\b\s*=\s*\{($balanced)\},/s
-            and $eprinttype = $1
-            and $eprinttype =~ /arxiv/i
-        ) {
-        $cr = "\n" . (" " x $indent);
-        $entry =~ s{
-            ^(\s*\beprinttype\b\s*=\s*\{$balanced\},)\s*
-        }{
-            $1.$cr."howpublished = {arXiv:$eprint},$cr"
-        }smxe;
-        $entry =~ s{
-            ^\s*\K(\b\w+\s*)(=)
-        }{
-            if (length $1 < 1 + length("howpublished")) {
-                $1.(" " x (1 + length("howpublished") - length $1)).$2
-            } else {
-                $1.$2
-            }
-        }gesxm;
-    }
+    $type eq "misc" and not exists $entry{howpublished} 
+        and exists $entry{eprint}
+        and exists $entry{eprinttype}
+        and $entry{eprinttype} =~ /arxiv/i  
+        and $entry{howpublished} = "arXiv:".$entry{eprint};
 
     my @titlepats = qw(booktitle journal journaltitle title shorttitle);
     for my $key (@titlepats) {
-        $entry =~ /(\b$key\b)(\s*)=\s*(\{$balanced\}),/s or next;
-        $prefix = $2;
-        $_ = $3;
-        /\$/ and next;
-        my $match = qr/\b$key\b\s*=\s*\Q$_\E/s;
+        $_ = $entry{$key} or next;
 
         s/[{}]//g;
         s/^\s*//;
@@ -205,15 +181,15 @@ while (<$biber>) {
 
         if ($key =~ /^journal|^booktitle/i) {
             s/^\s*the\s+//i;
+            s/^\s*$ordinals\s+annual\s+//i;
             s/^\s*$ordinals\s+//i;
-            s/^\s*annual\s+//i;
             s/^\s*proceedings of\s+//i;
+            s/^\s*$ordinals\s+annual\s+//i;
             s/^\s*$ordinals\s+//i;
-            s/^\s*annual\s+//i;
             s/^\s*conference on ((?:\s*\b\w+\b\s*){4,})/$1/i;
             s/^\s*advances in\s+//i;
-            s/^\s*\d+\s*//;
             s/^\s*the\s+//i;
+            s/^\s*\d+\s*//;
             s/^\s*$ordinals\s+//i;
             s/\(.*\)\s*$//i;
             s/arxiv/arXiv/gi;
@@ -221,7 +197,8 @@ while (<$biber>) {
         };
 
         if ($key eq "journaltitle") {
-            $key = "journal     ";
+            delete $entry{journaltitle};
+            $key = "journal"
         };
 
         $_ = ucfirst titlecase $_;
@@ -239,40 +216,65 @@ while (<$biber>) {
             "{$&}"
         }gxe;
 
-        $entry =~ s/$match/$key$prefix= {$_}/s;
+        $entry{$key} = $_;
     }
 
-    $entry =~ s{
-        \bauthor\b\s*=\s*\K\{$balanced\}
-    }{
-        "{".($1 =~ s/\*//gr)."}"
-    }sxe;
+    $entry{author} =~ s/\*//g;
 
-    $entry =~ s{
-        \beprinttype\b\s*=\s*\K\{arxiv\}
-    }{
-        "{arXiv}"
-    }sxie;
+    exists $entry{eprinttype} and $entry{eprinttype} =~ s/\b(arxiv)\b/arXiv/gi;
 
-    @delpats = qw(url urldate abstract keywords note lang issn);
+    @dk = qw(urldate abstract keywords note lang issn location file annotation);
+
     if ($type eq "misc") {
-        push @delpats, qw(eprintclass)
+        push @dk, qw(eprintclass)
     } else {
-        push @delpats, qw(doi eprint urldate);
+        push @dk, qw(eprint urldate);
     }
 
-    for my $key (@delpats) {
-        $entry =~ s/$key\w*\s*=\s*\{$balanced\},\s*//s;
+    if (exists $entry{url} and $entry{url} =~ /doi\.org/) {
+        push @dk, qw(url);
     }
 
-    $entries{$k} = $entry;
+    if (exists $entry{doi} and exists $entry{url} and $entry{doi} =~ /arXiv/i
+                           and $entry{url} =~ /arXiv/i) {
+        delete $entry{doi};
+    }
+
+    if ($entry{howpublished} =~ /\Q$entry{number}\E/i) {
+        delete $entry{number};
+    }
+
+    for my $key (@dk) {
+        delete $entry{$_} for grep {/^$key/i} keys %entry;
+    }
+
+    %entry = map {$_ => "{".$entry{$_}."}"} keys %entry;
+    $entry{$_} = $extra{$_} for keys %extra;
+
+    my $spc = " " x $indent;
+    my $eqidt = max map {1 + length($_)} keys %entry;
+    my @fields = sort {$a cmp $b} keys %entry;
+    my @lines = map {"$spc".(sprintf "%-${eqidt}s", $_)."= ".$entry{$_}."," } @fields;
+    push @bibkeys, $k unless exists $entries{$k};
+    $entries{$k}  =<<~EOF;
+    \@$type\{$k,
+    @{[ join "\n", @lines ]}
+    \}
+    EOF
 };
 
-for (@ARGV) {
-    unlink "$_.blg";
-}
+unlink "$arg.blg";
 
-for (sort {(lc $a) cmp (lc $b)} keys %entries) {
+sub getkeys {
+    if ($unsorted) {
+        return @bibkeys;
+    } else {
+        return sort {(lc $a) cmp (lc $b)} keys %entries
+    }
+};
+
+
+for (getkeys) {
     $_ = $entries{$_};
     while (/\s\s=/ and !/\S\s=/) {
         s/^(.*)\s(\s=)|^(\s)\s(\s*\S[^=]*$)/$1$2$3$4/gm;
@@ -283,7 +285,7 @@ for (sort {(lc $a) cmp (lc $b)} keys %entries) {
         $cr = "\n" . (" " x $nidt);
         $n = $wrap;
         while (/.*$/ and length $& > $n) {
-            s/^(.{1,$n})\s+// or break;
+            s/^(.{1,$n}[^= ])\s+([^ =])/$2/ or last;
             print "$1$cr";
             $n = $wrap - $nidt;
             $n < 1 and $n = 10;
